@@ -1,86 +1,102 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Button, Typography, Paper, Box, Alert, Chip } from '@mui/material';
+import { Button, Typography, Paper, Box, Alert, Chip, LinearProgress } from '@mui/material';
+
+// Haversine formula to calculate distance between two points in meters
+const calculateDistance = (lat1, lon1, lat2, lon2) => {
+  const R = 6371e3; // Earth radius in meters
+  const φ1 = (lat1 * Math.PI) / 180;
+  const φ2 = (lat2 * Math.PI) / 180;
+  const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+  const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+
+  const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+            Math.cos(φ1) * Math.cos(φ2) *
+            Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c;
+};
 
 const SpeedTracker = () => {
   const [speed, setSpeed] = useState(0);
   const [accuracy, setAccuracy] = useState(null);
   const [isTracking, setIsTracking] = useState(false);
-  const [watchId, setWatchId] = useState(null);
   const [error, setError] = useState('');
   const [unit, setUnit] = useState('km/h');
 
-  // Buffer to store recent speeds for smoothing (Moving Average)
+  // Refs for persistent data between renders
+  const lastPosition = useRef(null);
+  const lastTimestamp = useRef(null);
   const speedBuffer = useRef([]);
-  const BUFFER_SIZE = 5;
+  const BUFFER_SIZE = 3; // Smaller buffer for more responsiveness
 
   useEffect(() => {
+    let watchId = null;
+
     if (isTracking) {
       if (!navigator.geolocation) {
-        setError('Geolocation is not supported by your browser.');
+        setError('Geolocation not supported');
         return;
       }
 
-      const id = navigator.geolocation.watchPosition(
+      watchId = navigator.geolocation.watchPosition(
         (position) => {
-          const rawSpeed = position.coords.speed;
-          const currentAccuracy = position.coords.accuracy;
+          const { latitude, longitude, speed: rawSpeed, accuracy: currentAccuracy } = position.coords;
+          const timestamp = position.timestamp;
           
-          setAccuracy(currentAccuracy.toFixed(1));
+          setAccuracy(currentAccuracy);
 
-          if (rawSpeed !== null) {
-            // Add new speed to buffer
-            speedBuffer.current.push(rawSpeed);
-            if (speedBuffer.current.length > BUFFER_SIZE) {
-              speedBuffer.current.shift();
+          let calculatedSpeed = rawSpeed;
+
+          // FALLBACK: If rawSpeed is null (common on many devices), calculate it manually
+          if (rawSpeed === null && lastPosition.current) {
+            const distance = calculateDistance(
+              lastPosition.current.latitude,
+              lastPosition.current.longitude,
+              latitude,
+              longitude
+            );
+            const timeDiff = (timestamp - lastTimestamp.current) / 1000; // seconds
+            
+            if (timeDiff > 0 && distance > 0.5) { // Ignore tiny movements (GPS drift)
+              calculatedSpeed = distance / timeDiff;
+            } else {
+              calculatedSpeed = 0;
             }
+          }
 
-            // Calculate moving average
+          // FILTER: Ignore extremely low speeds (GPS noise while standing still)
+          if (calculatedSpeed < 0.2) calculatedSpeed = 0;
+
+          // SMOOTHING: Moving average
+          if (calculatedSpeed !== null) {
+            speedBuffer.current.push(calculatedSpeed);
+            if (speedBuffer.current.length > BUFFER_SIZE) speedBuffer.current.shift();
             const avgSpeed = speedBuffer.current.reduce((a, b) => a + b, 0) / speedBuffer.current.length;
             
             let displaySpeed = avgSpeed;
-            if (unit === 'km/h') {
-              displaySpeed = (avgSpeed * 3.6).toFixed(1);
-            } else if (unit === 'mph') {
-              displaySpeed = (avgSpeed * 2.23694).toFixed(1);
-            }
+            if (unit === 'km/h') displaySpeed = (avgSpeed * 3.6).toFixed(1);
+            else if (unit === 'mph') displaySpeed = (avgSpeed * 2.23694).toFixed(1);
             
             setSpeed(displaySpeed);
-            setError('');
-          } else {
-            // If speed is null, user might be stationary
-            setSpeed(0);
-            if (currentAccuracy > 30) {
-              setError('Weak GPS signal. Accuracy: ±' + currentAccuracy.toFixed(0) + 'm');
-            } else {
-              setError('');
-            }
           }
+
+          // Update refs for next calculation
+          lastPosition.current = { latitude, longitude };
+          lastTimestamp.current = timestamp;
+          setError('');
         },
         (err) => {
-          if (err.code === 1) {
-            setError('Geolocation permission denied.');
-          } else if (err.code === 2) {
-            setError("Position unavailable. Check if GPS is enabled.");
-          } else {
-            setError(`Error: ${err.message}`);
-          }
-          setSpeed(0);
+          setError(err.code === 1 ? 'Permission Denied' : 'Signal Lost');
           setIsTracking(false);
         },
-        { 
-          enableHighAccuracy: true, 
-          timeout: 10000, 
-          maximumAge: 0 
-        }
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
       );
-      setWatchId(id);
     } else {
-      if (watchId) {
-        navigator.geolocation.clearWatch(watchId);
-        setWatchId(null);
-      }
       setSpeed(0);
       setAccuracy(null);
+      lastPosition.current = null;
+      lastTimestamp.current = null;
       speedBuffer.current = [];
     }
 
@@ -89,78 +105,56 @@ const SpeedTracker = () => {
     };
   }, [isTracking, unit]);
 
-  const toggleUnit = () => {
-    setUnit(prevUnit => (prevUnit === 'km/h' ? 'mph' : 'km/h'));
-  };
+  // Signal quality calculation (0-100)
+  const signalQuality = accuracy ? Math.max(0, Math.min(100, 100 - (accuracy / 2))) : 0;
 
   return (
-    <Box
-      sx={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        minHeight: '100vh',
-        backgroundColor: '#121212',
-        padding: 2,
-      }}
-    >
-      <Paper elevation={6} sx={{ padding: 4, borderRadius: 4, textAlign: 'center', maxWidth: 400, width: '100%', bgcolor: 'background.paper' }}>
-        <Typography variant="h5" color="textSecondary" gutterBottom>
-          Real-time Speed
+    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', bgcolor: '#0a0a0a', p: 2 }}>
+      <Paper elevation={12} sx={{ p: 4, borderRadius: 6, textAlign: 'center', maxWidth: 400, width: '100%', bgcolor: '#1a1a1a', border: '1px solid #333' }}>
+        
+        <Typography variant="overline" sx={{ color: '#888', letterSpacing: 2 }}>
+          GPS SPEEDOMETER
         </Typography>
 
-        {error && (
-          <Alert severity="warning" sx={{ mb: 2, borderRadius: 2 }}>
-            {error}
-          </Alert>
-        )}
+        {error && <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>{error}</Alert>}
 
         <Box sx={{ my: 4 }}>
-          <Typography variant="h1" sx={{ fontWeight: 900, color: 'primary.main', mb: 0 }}>
+          <Typography variant="h1" sx={{ fontWeight: 900, color: '#00e5ff', fontSize: '6rem', textShadow: '0 0 20px rgba(0,229,255,0.3)' }}>
             {speed}
           </Typography>
-          <Typography variant="h4" color="textSecondary">
-            {unit}
+          <Typography variant="h5" sx={{ color: '#888', mt: -1 }}>
+            {unit.toUpperCase()}
           </Typography>
         </Box>
 
-        {accuracy && (
-          <Box sx={{ mb: 3 }}>
-            <Chip 
-              label={`GPS Accuracy: ±${accuracy}m`} 
-              color={accuracy < 20 ? "success" : accuracy < 50 ? "warning" : "error"}
-              variant="outlined"
-            />
+        <Box sx={{ width: '100%', mb: 4 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+            <Typography variant="caption" sx={{ color: '#666' }}>SIGNAL QUALITY</Typography>
+            <Typography variant="caption" sx={{ color: accuracy < 20 ? '#4caf50' : '#ff9800' }}>
+               ±{accuracy ? accuracy.toFixed(1) : '0'}m
+            </Typography>
           </Box>
-        )}
+          <LinearProgress 
+            variant="determinate" 
+            value={signalQuality} 
+            sx={{ height: 6, borderRadius: 3, bgcolor: '#333', '& .MuiLinearProgress-bar': { bgcolor: signalQuality > 70 ? '#4caf50' : '#ff9800' } }} 
+          />
+        </Box>
 
         <Box sx={{ display: 'flex', gap: 2, flexDirection: 'column' }}>
-          {!isTracking ? (
-            <Button
-              variant="contained"
-              size="large"
-              fullWidth
-              onClick={() => setIsTracking(true)}
-              sx={{ py: 2, fontSize: '1.2rem', borderRadius: 3 }}
-            >
-              Start Tracking
-            </Button>
-          ) : (
-            <Button
-              variant="outlined"
-              color="error"
-              size="large"
-              fullWidth
-              onClick={() => setIsTracking(false)}
-              sx={{ py: 2, fontSize: '1.2rem', borderRadius: 3 }}
-            >
-              Stop Tracking
-            </Button>
-          )}
+          <Button
+            variant={isTracking ? "outlined" : "contained"}
+            color={isTracking ? "error" : "primary"}
+            size="large"
+            fullWidth
+            onClick={() => setIsTracking(!isTracking)}
+            sx={{ py: 2, borderRadius: 4, fontWeight: 'bold' }}
+          >
+            {isTracking ? "STOP TRACKING" : "START TRACKING"}
+          </Button>
           
-          <Button variant="text" onClick={toggleUnit} sx={{ mt: 1 }}>
-            Switch to {unit === 'km/h' ? 'MPH' : 'KM/H'}
+          <Button variant="text" onClick={() => setUnit(u => u === 'km/h' ? 'mph' : 'km/h')} sx={{ color: '#666' }}>
+            USE {unit === 'km/h' ? 'MPH' : 'KM/H'}
           </Button>
         </Box>
       </Paper>
