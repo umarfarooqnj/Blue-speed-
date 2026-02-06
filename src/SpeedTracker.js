@@ -18,7 +18,7 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
 };
 
 const SpeedTracker = () => {
-  const [speed, setSpeed] = useState(0);
+  const [rawSpeed, setRawSpeed] = useState(0); // Speed in meters per second
   const [accuracy, setAccuracy] = useState(null);
   const [isTracking, setIsTracking] = useState(false);
   const [error, setError] = useState('');
@@ -28,7 +28,7 @@ const SpeedTracker = () => {
   const lastPosition = useRef(null);
   const lastTimestamp = useRef(null);
   const speedBuffer = useRef([]);
-  const BUFFER_SIZE = 3; // Smaller buffer for more responsiveness
+  const BUFFER_SIZE = 3;
 
   useEffect(() => {
     let watchId = null;
@@ -41,47 +41,40 @@ const SpeedTracker = () => {
 
       watchId = navigator.geolocation.watchPosition(
         (position) => {
-          const { latitude, longitude, speed: rawSpeed, accuracy: currentAccuracy } = position.coords;
+          const { latitude, longitude, speed: gpsSpeed, accuracy: currentAccuracy } = position.coords;
           const timestamp = position.timestamp;
           
           setAccuracy(currentAccuracy);
 
-          let calculatedSpeed = rawSpeed;
+          let calculatedSpeed = gpsSpeed;
 
-          // FALLBACK: If rawSpeed is null (common on many devices), calculate it manually
-          if (rawSpeed === null && lastPosition.current) {
+          // FALLBACK: Manual calculation if GPS speed is null
+          if (gpsSpeed === null && lastPosition.current) {
             const distance = calculateDistance(
               lastPosition.current.latitude,
               lastPosition.current.longitude,
               latitude,
               longitude
             );
-            const timeDiff = (timestamp - lastTimestamp.current) / 1000; // seconds
+            const timeDiff = (timestamp - lastTimestamp.current) / 1000;
             
-            if (timeDiff > 0 && distance > 0.5) { // Ignore tiny movements (GPS drift)
+            if (timeDiff > 0 && distance > 0.5) {
               calculatedSpeed = distance / timeDiff;
             } else {
               calculatedSpeed = 0;
             }
           }
 
-          // FILTER: Ignore extremely low speeds (GPS noise while standing still)
-          if (calculatedSpeed < 0.2) calculatedSpeed = 0;
+          // FILTER: Ignore GPS noise
+          if (calculatedSpeed < 0.2 || calculatedSpeed === null) calculatedSpeed = 0;
 
-          // SMOOTHING: Moving average
-          if (calculatedSpeed !== null) {
-            speedBuffer.current.push(calculatedSpeed);
-            if (speedBuffer.current.length > BUFFER_SIZE) speedBuffer.current.shift();
-            const avgSpeed = speedBuffer.current.reduce((a, b) => a + b, 0) / speedBuffer.current.length;
-            
-            let displaySpeed = avgSpeed;
-            if (unit === 'km/h') displaySpeed = (avgSpeed * 3.6).toFixed(1);
-            else if (unit === 'mph') displaySpeed = (avgSpeed * 2.23694).toFixed(1);
-            
-            setSpeed(displaySpeed);
-          }
+          // SMOOTHING
+          speedBuffer.current.push(calculatedSpeed);
+          if (speedBuffer.current.length > BUFFER_SIZE) speedBuffer.current.shift();
+          const avgSpeed = speedBuffer.current.reduce((a, b) => a + b, 0) / speedBuffer.current.length;
+          
+          setRawSpeed(avgSpeed);
 
-          // Update refs for next calculation
           lastPosition.current = { latitude, longitude };
           lastTimestamp.current = timestamp;
           setError('');
@@ -93,7 +86,7 @@ const SpeedTracker = () => {
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
       );
     } else {
-      setSpeed(0);
+      setRawSpeed(0);
       setAccuracy(null);
       lastPosition.current = null;
       lastTimestamp.current = null;
@@ -103,9 +96,13 @@ const SpeedTracker = () => {
     return () => {
       if (watchId) navigator.geolocation.clearWatch(watchId);
     };
-  }, [isTracking, unit]);
+  }, [isTracking]); // Removed 'unit' to prevent restart on toggle
 
-  // Signal quality calculation (0-100)
+  // Unit conversion logic
+  const displaySpeed = unit === 'km/h' 
+    ? (rawSpeed * 3.6).toFixed(1) 
+    : (rawSpeed * 2.23694).toFixed(1);
+
   const signalQuality = accuracy ? Math.max(0, Math.min(100, 100 - (accuracy / 2))) : 0;
 
   return (
@@ -120,7 +117,7 @@ const SpeedTracker = () => {
 
         <Box sx={{ my: 4 }}>
           <Typography variant="h1" sx={{ fontWeight: 900, color: '#00e5ff', fontSize: '6rem', textShadow: '0 0 20px rgba(0,229,255,0.3)' }}>
-            {speed}
+            {displaySpeed}
           </Typography>
           <Typography variant="h5" sx={{ color: '#888', mt: -1 }}>
             {unit.toUpperCase()}
@@ -130,7 +127,7 @@ const SpeedTracker = () => {
         <Box sx={{ width: '100%', mb: 4 }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
             <Typography variant="caption" sx={{ color: '#666' }}>SIGNAL QUALITY</Typography>
-            <Typography variant="caption" sx={{ color: accuracy < 20 ? '#4caf50' : '#ff9800' }}>
+            <Typography variant="caption" sx={{ color: accuracy && accuracy < 20 ? '#4caf50' : '#ff9800' }}>
                ±{accuracy ? accuracy.toFixed(1) : '0'}m
             </Typography>
           </Box>
