@@ -1,7 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Button, Typography, Paper, Box, Alert, Chip, LinearProgress } from '@mui/material';
 
-// Haversine formula to calculate distance between two points in meters
+/**
+ * Calculates the great-circle distance between two points on the Earth's surface
+ * using the Haversine formula.
+ * 
+ * @param {number} lat1 - Latitude of the first point in degrees.
+ * @param {number} lon1 - Longitude of the first point in degrees.
+ * @param {number} lat2 - Latitude of the second point in degrees.
+ * @param {number} lon2 - Longitude of the second point in degrees.
+ * @returns {number} The distance between the points in meters.
+ */
 const calculateDistance = (lat1, lon1, lat2, lon2) => {
   const R = 6371e3; // Earth radius in meters
   const φ1 = (lat1 * Math.PI) / 180;
@@ -17,6 +26,18 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
   return R * c;
 };
 
+/**
+ * SpeedTracker Component
+ * 
+ * A React component that tracks and displays real-time speed using the browser's Geolocation API.
+ * Features include:
+ * - Speed display in KM/H or MPH.
+ * - Signal accuracy tracking and visualization.
+ * - Fallback manual speed calculation if the device doesn't provide it directly.
+ * - Speed smoothing using a rolling average buffer.
+ * 
+ * @returns {JSX.Element} The rendered SpeedTracker UI.
+ */
 const SpeedTracker = () => {
   const [rawSpeed, setRawSpeed] = useState(0); // Speed in meters per second
   const [accuracy, setAccuracy] = useState(null);
